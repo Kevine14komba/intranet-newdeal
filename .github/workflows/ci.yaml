@@ -22,11 +22,7 @@ jobs:
       - name: Checkout source code
         uses: actions/checkout@v4
 
-      - name: Display variables
-        run: |
-          echo "IMAGE_NAME: $IMAGE_NAME"
-          echo "IMAGE_TAG: $IMAGE_TAG"
-          echo "DOCKER_REGISTRY: $DOCKER_REGISTRY"
+
 
       - name: Login to Docker Hub
         run: |
