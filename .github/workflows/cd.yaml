@@ -1,0 +1,112 @@
+name: CD Pipeline - Prod
+
+on:
+  push:
+    branches:
+      - prod
+
+env:
+  IMAGE_NAME: ${{ secrets.DOCKER_USERNAME }}/intranet-newdeal
+
+jobs:
+  # ─────────────────────────────────────────
+  # JOB 1 : Scan de sécurité
+  # ─────────────────────────────────────────
+  security-scan:
+    name: Scan Sécurité Production
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout du code
+        uses: actions/checkout@v4
+
+      - name: Login vers Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Pull de l'image depuis Docker Hub
+        run: docker pull ${{ env.IMAGE_NAME }}:dev
+
+      - name: Scan vulnérabilités CRITIQUE (bloquant)
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ env.IMAGE_NAME }}:dev
+          format: table
+          exit-code: '1'          # BLOQUE si vulnérabilité critique trouvée
+          severity: 'CRITICAL'
+
+  # ─────────────────────────────────────────
+  # JOB 2 : Déploiement en production
+  # ─────────────────────────────────────────
+  deploy:
+    name: Déploiement Production
+    runs-on: self-hosted          # Runner nommé runner_prod
+    needs: security-scan
+
+    steps:
+      - name: Login vers Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Arrêter le conteneur existant (si présent)
+        run: |
+          docker stop intranet-prod || true
+          docker rm intranet-prod || true
+
+      - name: Pull de la dernière image
+        run: docker pull ${{ env.IMAGE_NAME }}:dev
+
+      - name: Tag comme version prod
+        run: docker tag ${{ env.IMAGE_NAME }}:dev ${{ env.IMAGE_NAME }}:prod
+
+      - name: Lancer le conteneur sur port 80
+        run: |
+          docker run -d \
+            --name intranet-prod \
+            --restart always \
+            -p 80:80 \
+            ${{ env.IMAGE_NAME }}:prod
+
+      - name: Vérifier que le service est actif
+        run: |
+          sleep 5
+          curl -f http://localhost:80 && echo "✅ Site accessible sur port 80"
+
+  # ─────────────────────────────────────────
+  # Notification email (succès ou échec)
+  # ─────────────────────────────────────────
+  notify:
+    name: 📧 Notification Email
+    runs-on: ubuntu-latest
+    needs: [security-scan, deploy]
+    if: always()                  # S'exécute même en cas d'échec
+
+    steps:
+      - name: Envoyer email de notification
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.gmail.com
+          server_port: 587
+          username: ${{ secrets.MAIL_USERNAME }}
+          password: ${{ secrets.MAIL_PASSWORD }}
+          subject: "[Intranet NewDeal] Pipeline CD - ${{ job.status }}"
+          to: ${{ secrets.MAIL_TO }}
+          from: ${{ secrets.MAIL_USERNAME }}
+          body: |
+            Bonjour,
+
+            Le pipeline CD de l'Intranet New Deal Technologique vient de s'exécuter.
+
+            Statut     : ${{ needs.deploy.result }}
+            Branche    : prod
+            Commit     : ${{ github.sha }}
+            Déclenché par : ${{ github.actor }}
+
+            Voir les détails : ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+            Cordialement,
+            Système CI/CD — Ministère de la Communication
